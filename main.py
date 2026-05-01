@@ -7,6 +7,7 @@ import pygame
 import random
 import sys
 import os
+import cv2   # used to play the boss-destroyed MP4 video
 
 # ── Window & frame-rate ─────────────────────────────────────
 SCREEN_W  = 1200
@@ -60,8 +61,8 @@ LEVELS = {
 }
 
 # The order levels are played through.
-# Choosing "medium" on the menu skips easy and plays medium → hard.
-LEVEL_ORDER = ["easy", "medium", "hard"]
+# Choosing "medium" on the menu skips easy and plays medium → hard → boss.
+LEVEL_ORDER = ["easy", "medium", "hard", "boss"]
 
 # ── Player fire-rate ─────────────────────────────────────────
 # Player fires 5 bullets per second → one bullet every 12 frames (60 fps / 5)
@@ -72,6 +73,7 @@ PLAYER_W,  PLAYER_H  = 80, 100
 ENEMY_W,   ENEMY_H   = 60, 60
 BULLET_W,  BULLET_H  = 4,  12
 PACK_W,    PACK_H    = 40, 40   # size of a blue energy pack sprite
+BOSS_W,    BOSS_H    = 250, 200  # size of the final boss sprite
 
 
 # ════════════════════════════════════════════════════════════
@@ -121,17 +123,19 @@ def draw_enemy_jet(surface, x, y):
 # ════════════════════════════════════════════════════════════
 
 class Bullet:
-    """A single bullet moving vertically up or down."""
+    """A single bullet that can move vertically and/or horizontally."""
 
-    def __init__(self, x, y, speed, color, image=None):
+    def __init__(self, x, y, speed, color, image=None, dx=0):
         self.x     = x
         self.y     = y
-        self.speed = speed    # negative = moves up (player); positive = moves down (enemy)
+        self.speed = speed    # vertical speed: negative = up (player), positive = down (enemy)
+        self.dx    = dx       # horizontal speed (0 for normal bullets, non-zero for boss spread)
         self.color = color
         self.image = image    # optional Surface; if set, blit it instead of drawing a rectangle
 
     def update(self):
         """Move bullet by its speed each frame."""
+        self.x += self.dx
         self.y += self.speed
 
     def get_rect(self):
@@ -182,7 +186,7 @@ class Player:
         # Start centred near the bottom of the screen
         self.x          = SCREEN_W // 2 - PLAYER_W // 2
         self.y          = SCREEN_H - PLAYER_H - 20
-        self.speed      = 5            # movement speed in pixels per frame
+        self.speed      =5           # movement speed in pixels per frame
         self.fire_timer = 0            # frames remaining before next shot is allowed
         self.bullets    = []           # list of active player Bullet objects
         self.lives         = 3
@@ -366,7 +370,9 @@ class EnemyFleet:
         # Load and scale the enemy image once for the whole fleet.
         assets_dir   = os.path.join(os.path.dirname(__file__), "game assets")
         raw_img      = pygame.image.load(os.path.join(assets_dir, cfg["enemy_image"])).convert_alpha()
-        enemy_image  = pygame.transform.scale(raw_img, (ENEMY_W, ENEMY_H))
+        scaled_img   = pygame.transform.scale(raw_img, (ENEMY_W, ENEMY_H))
+        # Flip vertically so enemy jets face downward toward the player.
+        enemy_image  = pygame.transform.flip(scaled_img, False, True)
 
         # Load and scale the enemy bullet image (energy bead2.png).
         raw_bead          = pygame.image.load(os.path.join(assets_dir, "energy bead2.png")).convert_alpha()
@@ -466,6 +472,58 @@ def draw_stars(surface, stars):
 
 
 # ════════════════════════════════════════════════════════════
+#  BOSS VIDEO PLAYBACK
+# ════════════════════════════════════════════════════════════
+
+def play_boss_video(screen, clock):
+    """
+    Play 'boss destroyed.MP4' frame-by-frame on the pygame screen using OpenCV.
+    The video plays at its native frame rate.  The player can skip it with
+    any key press.  Returns when the video ends or is skipped.
+    """
+    video_path = os.path.join(os.path.dirname(__file__), "game assets", "boss destroyed.MP4")
+    cap = cv2.VideoCapture(video_path)
+
+    if not cap.isOpened():
+        # If the video can't be opened just continue silently.
+        return
+
+    # Work out how long to show each frame (ms) from the video's own FPS.
+    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    frame_delay = int(1000 / video_fps)  # milliseconds per frame
+
+    while True:
+        # Allow the player to skip the video with any key.
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                cap.release()
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                cap.release()
+                return   # skip the rest of the video
+
+        ret, frame = cap.read()
+        if not ret:
+            break   # video finished
+
+        # OpenCV gives frames as BGR numpy arrays; convert to RGB for pygame.
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Resize the frame to fill the game window.
+        frame_rgb = cv2.resize(frame_rgb, (SCREEN_W, SCREEN_H))
+
+        # Convert to a pygame Surface and display it.
+        pg_surface = pygame.surfarray.make_surface(frame_rgb.swapaxes(0, 1))
+        screen.blit(pg_surface, (0, 0))
+        pygame.display.flip()
+
+        clock.tick(video_fps)   # pace playback to the video's frame rate
+
+    cap.release()
+
+
+# ════════════════════════════════════════════════════════════
 #  HUD (Heads-Up Display)
 # ════════════════════════════════════════════════════════════
 
@@ -517,6 +575,106 @@ def enemies_reached_bottom(fleet):
         if e.y + ENEMY_H >= SCREEN_H - PLAYER_H - 30:
             return True
     return False
+
+
+# ════════════════════════════════════════════════════════════
+#  BOSS
+# ════════════════════════════════════════════════════════════
+
+class Boss:
+    """
+    Final boss – a single large enemy (250×200) built from enemy3.png.
+    Takes 3 hits before it dies.  Fires bullets twice as fast as the hard level.
+    Moves sideways and bounces off the walls.
+    """
+
+    # Boss fires 4 bullets in random directions every 0.5 seconds (30 frames at 60 fps).
+    FIRE_RATE = 30
+
+    def __init__(self):
+        assets_dir = os.path.join(os.path.dirname(__file__), "game assets")
+
+        # Load and scale the boss sprite.
+        raw_img    = pygame.image.load(os.path.join(assets_dir, "enemy3.png")).convert_alpha()
+        scaled_img = pygame.transform.scale(raw_img, (BOSS_W, BOSS_H))
+        # Flip vertically so it faces the player.
+        self.image = pygame.transform.flip(scaled_img, False, True)
+
+        # Load the bullet image.
+        raw_bead          = pygame.image.load(os.path.join(assets_dir, "energy bead2.png")).convert_alpha()
+        self.bullet_image = pygame.transform.scale(raw_bead, (BULLET_W, BULLET_H))
+
+        # Centre the boss near the top of the screen.
+        self.x         = SCREEN_W // 2 - BOSS_W // 2
+        self.y         = 40
+        self.speed     = 3          # sideways movement speed
+        self.direction = 1          # 1 = right, -1 = left
+        self.health    = 20         # takes 20 hits to kill
+        self.alive     = True
+        self.bullets   = []         # active boss bullets
+        self.fire_timer = self.FIRE_RATE
+
+    # ── Interface matching EnemyFleet so existing helpers work ──
+    def alive_enemies(self):
+        """Return a list containing the boss if it is still alive."""
+        return [self] if self.alive else []
+
+    def all_dead(self):
+        """True once the boss has been destroyed."""
+        return not self.alive
+
+    def get_rect(self):
+        return pygame.Rect(self.x + 10, self.y + 10, BOSS_W - 20, BOSS_H - 20)
+
+    def hit(self):
+        """Register one hit on the boss.  Destroys it when health reaches zero."""
+        self.health -= 1
+        if self.health <= 0:
+            self.alive = False
+
+    def update(self):
+        """Move the boss and fire bullets."""
+        # Bounce between walls.
+        self.x += self.speed * self.direction
+        if self.x + BOSS_W >= SCREEN_W - 10:
+            self.direction = -1
+        elif self.x <= 10:
+            self.direction = 1
+
+        # Fire 4 bullets in random directions every 0.5 seconds.
+        self.fire_timer -= 1
+        if self.fire_timer <= 0:
+            self.fire_timer = self.FIRE_RATE
+            cx = self.x + BOSS_W // 2 - BULLET_W // 2   # centre of the boss
+            cy = self.y + BOSS_H
+            for _ in range(3):
+                # Pick a random angle in the lower half (0° to 180°) so bullets
+                # always travel downward toward the player.
+                angle = random.uniform(0, 3.14159)   # 0 = right, pi = left
+                speed_x = round(7 * (0.5 - random.random()) * 2, 1)  # random left/right
+                speed_y = random.uniform(5, 9)        # always moves downward
+                self.bullets.append(
+                    Bullet(cx, cy, speed=speed_y, color=RED,
+                           image=self.bullet_image, dx=speed_x)
+                )
+
+        # Move bullets and remove ones that leave the screen (any edge).
+        for b in self.bullets:
+            b.update()
+        self.bullets = [b for b in self.bullets
+                        if -BULLET_W < b.x < SCREEN_W + BULLET_W and b.y < SCREEN_H + BULLET_H]
+
+    def draw(self, surface):
+        if self.alive:
+            surface.blit(self.image, (self.x, self.y))
+            # Draw a small health bar above the boss.
+            bar_w = BOSS_W
+            bar_h = 12
+            pygame.draw.rect(surface, GREY,  (self.x, self.y - 18, bar_w, bar_h))
+            filled = int(bar_w * (self.health / 15))
+            pygame.draw.rect(surface, RED,   (self.x, self.y - 18, filled, bar_h))
+        for b in self.bullets:
+            b.draw(surface)
 
 def draw_menu(surface, big_font, small_font):
     """Difficulty selection screen shown before the game starts."""
@@ -616,12 +774,19 @@ def run_game(screen, clock, fonts, start_level_name):
 
     for level_num, level_name in enumerate(levels_to_play):
         is_last = (level_num == len(levels_to_play) - 1)  # True on the final level
-        cfg     = LEVELS[level_name]
-        fleet   = EnemyFleet(cfg)   # fresh enemy grid for each level
+
+        # The boss level uses a Boss object instead of an EnemyFleet.
+        is_boss = (level_name == "boss")
+        if is_boss:
+            fleet = Boss()           # Boss mimics the EnemyFleet interface
+        else:
+            cfg   = LEVELS[level_name]
+            fleet = EnemyFleet(cfg)  # fresh enemy grid for each regular level
 
         game_over       = False
         won             = False
         advance_to_next = False     # set True when player presses key on "Level Complete" screen
+        boss_video_played = False   # ensures the defeat video is only played once
 
         # ── Energy packs (reset fresh for every level) ────────
         packs            = []       # active blue EnergyPack objects currently on screen
@@ -700,8 +865,17 @@ def run_game(screen, clock, fonts, start_level_name):
                         purple_packs.remove(ppk)
                         player.lives += 1   # +1 extra life
 
-                # Check all collisions
-                check_player_bullets_vs_enemies(player, fleet)
+                # Check all collisions.
+                # The boss requires a special hit check (3 hits to kill).
+                if is_boss:
+                    for bullet in player.bullets:
+                        if fleet.alive and bullet.get_rect().colliderect(fleet.get_rect()):
+                            bullet.y = -9999   # remove bullet
+                            fleet.hit()        # register one hit on the boss
+                            player.score += 30 # boss hits worth more points
+                            break
+                else:
+                    check_player_bullets_vs_enemies(player, fleet)
                 check_enemy_bullets_vs_player(player, fleet)
 
                 # Win this level: all enemies destroyed
@@ -724,7 +898,10 @@ def run_game(screen, clock, fonts, start_level_name):
                 draw_level_complete(screen, big_font, small_font,
                                     levels_to_play[level_num + 1], player.score)
             elif game_over and won and is_last:
-                # Player cleared the final level – show congratulations
+                # Boss defeated – play the destruction video once, then congratulate.
+                if is_boss and not boss_video_played:
+                    boss_video_played = True
+                    play_boss_video(screen, clock)
                 draw_congratulations(screen, big_font, small_font, player.score)
             elif game_over:
                 # Player lost – show game over screen
@@ -774,6 +951,55 @@ def run_menu(screen, clock, fonts):
 
 
 # ════════════════════════════════════════════════════════════
+#  SPLASH SCREEN
+# ════════════════════════════════════════════════════════════
+
+def show_splash(screen, clock):
+    """
+    Display splash screen.png scaled to fill the window for 3 seconds.
+    A loading progress bar grows from left to right across the bottom.
+    The player can skip it by pressing any key.
+    """
+    SPLASH_DURATION = 2          # total display time in seconds
+    total_frames    = FPS * SPLASH_DURATION
+
+    # Load and scale the splash image to fill the whole screen.
+    assets_dir   = os.path.join(os.path.dirname(__file__), "game assets")
+    raw_splash   = pygame.image.load(os.path.join(assets_dir, "splash screen.png")).convert()
+    splash_image = pygame.transform.scale(raw_splash, (SCREEN_W, SCREEN_H))
+
+    # Progress bar dimensions
+    BAR_H      = 18
+    BAR_MARGIN = 40                          # gap from screen edges
+    BAR_Y      = SCREEN_H - BAR_H - BAR_MARGIN
+    BAR_MAX_W  = SCREEN_W - BAR_MARGIN * 2  # full width when complete
+
+    for frame in range(total_frames):
+        # Handle events so the window stays responsive and allow skipping.
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN:
+                return   # any key skips the splash screen
+
+        # Draw the splash image.
+        screen.blit(splash_image, (0, 0))
+
+        # Draw the progress bar background (dark track).
+        pygame.draw.rect(screen, GREY,
+                         (BAR_MARGIN, BAR_Y, BAR_MAX_W, BAR_H), border_radius=6)
+
+        # Draw the filled portion of the bar (grows each frame).
+        filled_w = int(BAR_MAX_W * (frame + 1) / total_frames)
+        pygame.draw.rect(screen, CYAN,
+                         (BAR_MARGIN, BAR_Y, filled_w, BAR_H), border_radius=6)
+
+        pygame.display.flip()
+        clock.tick(FPS)
+
+
+# ════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ════════════════════════════════════════════════════════════
 
@@ -792,6 +1018,9 @@ def main():
     big_font   = pygame.font.SysFont("Arial", 52, bold=True)
     small_font = pygame.font.SysFont("Arial", 24)
     fonts      = (big_font, small_font)
+
+    # Show the splash screen with a progress bar for 3 seconds.
+    show_splash(screen, clock)
 
     # Outer loop: menu → game → menu (or restart) → ...
     while True:
