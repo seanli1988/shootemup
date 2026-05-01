@@ -35,3 +35,18 @@ If your jet flies over a pack, you collect it and gain a temporary power-up that
 Packs that reach the bottom without being collected are removed automatically
 Packs reset at the start of each new level
 
+Every 9 seconds a new purple energy pack  energy pack.png) spawns at a random horizontal position at the top of the screen and drifts downward
+If your jet flies over a pack, you collect it and gain a extra life
+Packs that reach the bottom without being collected are removed automatically
+Packs reset at the start of each new level
+when the game ends add a restart option
+------------------
+flip all enemy jets vertically so they face towards the player's jet
+add a score system that increases by 10 points for each enemy jet destroyed
+-----------------
+lets add a final boss level after the hard level. use enemy3.png for(250*200) the boss will have 10 times the health of a regular enemy and will fire bullets twice as fast. Defeating the boss will display a 'Congratulations, you won!' message and offer a restart option.
+the boss will  fire 3 bullets in random directions every 0.5 seconds
+if the boss is defeated, play boss destroyed.MP4 and offer a restart option.
+-------
+show splash screen.png with a progress bar for 2 seconds before the game starts
+when bullets hit each other, they should both disappear and play a sound effect (bullet collision.mp3)
