@@ -1,0 +1,30 @@
+i am creating a 2d classic arcade game of shootem up. 
+
+i want to write the game in python. keep the code simple with plenty of comments to help me understand the code.
+
+i want 3 rows of enemy jets
+the enemy jets will fire 2 bullets per second 
+my jet will fire 5 bullets per second 
+i want to make levels about how hard the game is: easy,medium and hard
+i want the my jet to move up,down,left and right.
+the first level will have 2 rows of enemy
+
+---------------
+if complet the current level then go to the next level
+if complets the final level then display 'congradulations,you won
+!'
+-----------------
+
+search for jet.png in game assets floder and replce my jet with jet.png
+the size of my jet is 80*100
+if my jet moves change it to jet.png
+set the first level's enemy to enemy1.png 
+set the third level's enemy to enemy3.png
+replace enemy's  bullets with energy bead2.png
+set the second level's enemy to enemy2.png
+replace my bullets with energy bead.png 
+if the my jet shoot bullets play gun shot.mp3 
+when my jet moves play sound jet accelerates
+when i stop moving stop jet accelerate
+make no horizon no return as background music forever
+set all enemys to 80*80
