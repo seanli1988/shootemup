@@ -71,6 +71,7 @@ PLAYER_FIRE_DELAY = 12   # frames between player shots
 PLAYER_W,  PLAYER_H  = 80, 100
 ENEMY_W,   ENEMY_H   = 60, 60
 BULLET_W,  BULLET_H  = 4,  12
+PACK_W,    PACK_H    = 40, 40   # size of a blue energy pack sprite
 
 
 # ════════════════════════════════════════════════════════════
@@ -184,8 +185,9 @@ class Player:
         self.speed      = 5            # movement speed in pixels per frame
         self.fire_timer = 0            # frames remaining before next shot is allowed
         self.bullets    = []           # list of active player Bullet objects
-        self.lives      = 3
-        self.score      = 0
+        self.lives         = 3
+        self.score         = 0
+        self.powerup_timer = 0    # frames remaining for the triple-shot power-up (0 = inactive)
 
     def handle_input(self, keys):
         """Move the jet based on arrow keys or WASD."""
@@ -218,13 +220,26 @@ class Player:
             self.y += self.speed
 
     def try_fire(self, keys):
-        """Fire a bullet if SPACE is held and the cooldown timer has expired."""
+        """Fire bullets if SPACE is held and the cooldown timer has expired.
+           With the energy-pack power-up active, fires 3 beads per shot."""
         self.fire_timer -= 1           # count down every frame
+
+        # Tick the power-up timer down each frame.
+        if self.powerup_timer > 0:
+            self.powerup_timer -= 1
+
         if keys[pygame.K_SPACE] and self.fire_timer <= 0:
-            # Bullet spawns at the nose of the jet (top-centre)
+            # Centre bullet spawns at the nose of the jet (top-centre).
             bx = self.x + PLAYER_W // 2 - BULLET_W // 2
             by = self.y
-            self.bullets.append(Bullet(bx, by, speed=-10, color=CYAN, image=self.bullet_image))
+            if self.powerup_timer > 0:
+                # Triple shot: one centre bead + two side beads slightly behind it.
+                self.bullets.append(Bullet(bx,      by,     speed=-10, color=CYAN, image=self.bullet_image))
+                self.bullets.append(Bullet(bx - 14, by + 8, speed=-10, color=CYAN, image=self.bullet_image))
+                self.bullets.append(Bullet(bx + 14, by + 8, speed=-10, color=CYAN, image=self.bullet_image))
+            else:
+                # Normal single shot.
+                self.bullets.append(Bullet(bx, by, speed=-10, color=CYAN, image=self.bullet_image))
             self.gun_sound.play()      # play the gun shot sound
             self.fire_timer = PLAYER_FIRE_DELAY   # reset cooldown
 
@@ -262,6 +277,74 @@ class Enemy:
     def draw(self, surface):
         if self.alive:
             surface.blit(self.image, (self.x, self.y))
+
+
+class EnergyPack:
+    """
+    A blue energy pack that drifts down from the top of the screen.
+    Flying over it grants a 5-second triple-shot power-up.
+    Packs reset at the start of each new level.
+    """
+
+    # Cache the scaled image so we only load it from disk once.
+    _image = None
+
+    def __init__(self):
+        if EnergyPack._image is None:
+            assets_dir = os.path.join(os.path.dirname(__file__), "game assets")
+            raw = pygame.image.load(
+                os.path.join(assets_dir, "blue energy pack.png")
+            ).convert_alpha()
+            EnergyPack._image = pygame.transform.scale(raw, (PACK_W, PACK_H))
+
+        # Spawn at a random x position, just above the visible screen area.
+        self.x = random.randint(0, SCREEN_W - PACK_W)
+        self.y = -PACK_H      # starts off-screen at the top
+        self.speed = 2        # drifts down 2 pixels per frame
+
+    def update(self):
+        """Move the pack downward each frame."""
+        self.y += self.speed
+
+    def get_rect(self):
+        return pygame.Rect(self.x, self.y, PACK_W, PACK_H)
+
+    def draw(self, surface):
+        surface.blit(self._image, (self.x, self.y))
+
+
+class PurpleEnergyPack:
+    """
+    A purple energy pack that drifts down from the top of the screen.
+    Flying over it grants the player one extra life.
+    Spawns every 9 seconds.  Packs reset at the start of each new level.
+    """
+
+    # Cache the scaled image so we only load it from disk once.
+    _image = None
+
+    def __init__(self):
+        if PurpleEnergyPack._image is None:
+            assets_dir = os.path.join(os.path.dirname(__file__), "game assets")
+            raw = pygame.image.load(
+                os.path.join(assets_dir, "purple energy pack.png")
+            ).convert_alpha()
+            PurpleEnergyPack._image = pygame.transform.scale(raw, (PACK_W, PACK_H))
+
+        # Spawn at a random x position, just above the visible screen area.
+        self.x = random.randint(0, SCREEN_W - PACK_W)
+        self.y = -PACK_H      # starts off-screen at the top
+        self.speed = 2        # drifts down 2 pixels per frame
+
+    def update(self):
+        """Move the pack downward each frame."""
+        self.y += self.speed
+
+    def get_rect(self):
+        return pygame.Rect(self.x, self.y, PACK_W, PACK_H)
+
+    def draw(self, surface):
+        surface.blit(self._image, (self.x, self.y))
 
 
 class EnemyFleet:
@@ -387,7 +470,7 @@ def draw_stars(surface, stars):
 # ════════════════════════════════════════════════════════════
 
 def draw_hud(surface, font, player, level_name):
-    """Draw score, lives and level name at the top of the screen."""
+    """Draw score, lives, level name and power-up status at the top of the screen."""
     score_txt = font.render(f"Score: {player.score}", True, WHITE)
     lives_txt = font.render(f"Lives: {player.lives}", True, WHITE)
     level_txt = font.render(f"Level: {level_name.upper()}", True, YELLOW)
@@ -395,6 +478,12 @@ def draw_hud(surface, font, player, level_name):
     surface.blit(score_txt, (10, 8))
     surface.blit(lives_txt, (SCREEN_W - lives_txt.get_width() - 10, 8))
     surface.blit(level_txt, (SCREEN_W // 2 - level_txt.get_width() // 2, 8))
+
+    # Show a countdown while the triple-shot power-up is active.
+    if player.powerup_timer > 0:
+        secs_left = (player.powerup_timer // FPS) + 1   # round up to nearest second
+        pu_txt = font.render(f"TRIPLE SHOT  {secs_left}s", True, (0, 180, 255))
+        surface.blit(pu_txt, (SCREEN_W // 2 - pu_txt.get_width() // 2, 36))
 
 
 # ════════════════════════════════════════════════════════════
@@ -470,7 +559,7 @@ def draw_congratulations(surface, big_font, small_font, score):
     sc_txt = small_font.render(f"Final Score: {score}", True, WHITE)
     surface.blit(sc_txt, (SCREEN_W // 2 - sc_txt.get_width() // 2, 295))
 
-    hint = small_font.render("M – Main Menu     Q – Quit", True, GREY)
+    hint = small_font.render("R – Restart     M – Main Menu     Q – Quit", True, GREY)
     surface.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, 380))
 
 
@@ -483,7 +572,7 @@ def draw_game_over(surface, big_font, small_font, score, won):
     sc_txt = small_font.render(f"Final Score: {score}", True, WHITE)
     surface.blit(sc_txt, (SCREEN_W // 2 - sc_txt.get_width() // 2, 265))
 
-    hint = small_font.render("M – Main Menu     Q – Quit", True, GREY)
+    hint = small_font.render("R – Restart     M – Main Menu     Q – Quit", True, GREY)
     surface.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, 360))
 
 
@@ -534,6 +623,14 @@ def run_game(screen, clock, fonts, start_level_name):
         won             = False
         advance_to_next = False     # set True when player presses key on "Level Complete" screen
 
+        # ── Energy packs (reset fresh for every level) ────────
+        packs            = []       # active blue EnergyPack objects currently on screen
+        pack_spawn_timer = 0        # counts up; a new blue pack spawns every 5 seconds
+
+        # ── Purple energy packs (reset fresh for every level) ──
+        purple_packs            = []   # active PurpleEnergyPack objects on screen
+        purple_pack_spawn_timer = 0    # counts up; a new purple pack spawns every 9 seconds
+
         # ── Inner loop: play one level ────────────────────────
         while True:
             # 1. Handle events
@@ -545,6 +642,9 @@ def run_game(screen, clock, fonts, start_level_name):
                     if won and not is_last:
                         # Any key on the "Level Complete" screen advances to the next level
                         advance_to_next = True
+                    elif event.key == pygame.K_r:
+                        # R – restart the whole run from the same starting level
+                        return 'restart'
                     elif event.key == pygame.K_m:
                         return 'menu'
                     elif event.key == pygame.K_q:
@@ -564,6 +664,41 @@ def run_game(screen, clock, fonts, start_level_name):
                 player.update_bullets()       # advance player bullets
 
                 fleet.update()               # advance enemies + their bullets
+
+                # ── Blue energy pack spawning & collection ───
+                pack_spawn_timer += 1
+                if pack_spawn_timer >= FPS * 5:   # spawn a new blue pack every 5 seconds
+                    pack_spawn_timer = 0
+                    packs.append(EnergyPack())
+
+                # Move blue packs down and remove any that reached the bottom.
+                for pk in packs:
+                    pk.update()
+                packs = [pk for pk in packs if pk.y < SCREEN_H]
+
+                # Check if the player flew over a blue pack.
+                pr = player.get_rect()
+                for pk in packs[:]:
+                    if pr.colliderect(pk.get_rect()):
+                        packs.remove(pk)
+                        player.powerup_timer = FPS * 5   # 5 seconds of triple shot
+
+                # ── Purple energy pack spawning & collection ──
+                purple_pack_spawn_timer += 1
+                if purple_pack_spawn_timer >= FPS * 9:   # spawn a new purple pack every 9 seconds
+                    purple_pack_spawn_timer = 0
+                    purple_packs.append(PurpleEnergyPack())
+
+                # Move purple packs down and remove any that reached the bottom.
+                for ppk in purple_packs:
+                    ppk.update()
+                purple_packs = [ppk for ppk in purple_packs if ppk.y < SCREEN_H]
+
+                # Check if the player flew over a purple pack – award an extra life.
+                for ppk in purple_packs[:]:
+                    if pr.colliderect(ppk.get_rect()):
+                        purple_packs.remove(ppk)
+                        player.lives += 1   # +1 extra life
 
                 # Check all collisions
                 check_player_bullets_vs_enemies(player, fleet)
@@ -596,6 +731,10 @@ def run_game(screen, clock, fonts, start_level_name):
                 draw_game_over(screen, big_font, small_font, player.score, won)
             else:
                 fleet.draw(screen)
+                for pk in packs:           # draw blue energy packs
+                    pk.draw(screen)
+                for ppk in purple_packs:   # draw purple energy packs
+                    ppk.draw(screen)
                 player.draw(screen)
                 draw_hud(screen, small_font, player, level_name)
 
@@ -654,10 +793,13 @@ def main():
     small_font = pygame.font.SysFont("Arial", 24)
     fonts      = (big_font, small_font)
 
-    # Outer loop: menu → game → menu → ...
+    # Outer loop: menu → game → menu (or restart) → ...
     while True:
         level_name = run_menu(screen, clock, fonts)
-        run_game(screen, clock, fonts, level_name)
+        result = run_game(screen, clock, fonts, level_name)
+        # 'restart' means replay from the same difficulty without going back to the menu.
+        while result == 'restart':
+            result = run_game(screen, clock, fonts, level_name)
 
 
 if __name__ == "__main__":
