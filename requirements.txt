@@ -28,3 +28,12 @@ when my jet moves play sound jet accelerates
 when i stop moving stop jet accelerate
 make no horizon no return as background music forever
 set all enemys to 80*80
+---------------------
+set energy pack.png and  energy pack2.png and put them randomly
+if you reseve energy pack.png then fire 3 energy bead.png per click and the power only lasts 10 seconds
+
+Every 5 seconds a new energy pack spawns at a random horizontal position at the top of the screen and drifts downward
+The two images alternate: first energy pack.png, then energy pack2.png, then back again
+If your jet flies over a pack, you collect it and gain +1 life
+Packs that reach the bottom without being collected are removed automatically
+Packs reset at the start of each new level
